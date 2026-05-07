@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>仓库条码采集组件</title>
+    <script src="https://unpkg.com/html5-qrcode"></script>
+    <style>
+        :root { --success-color: #4CAF50; --error-color: #F44336; }
+        body { margin: 0; padding: 0; background: #000; font-family: -apple-system, sans-serif; overflow: hidden; }
+        
+        /* 扫描器全屏容器 */
+        #reader { width: 100vw; height: 100vh; }
+        
+        /* 扫码成功时的闪烁层 */
+        #flash {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(76, 175, 80, 0.4); pointer-events: none;
+            z-index: 9999; opacity: 0; transition: opacity 0.15s;
+        }
+
+        /* 底部状态栏 */
+        .status-bar {
+            position: fixed; bottom: 0; left: 0; right: 0;
+            padding: 20px; background: rgba(0,0,0,0.7);
+            color: white; text-align: center; z-index: 100;
+            backdrop-filter: blur(10px); border-top: 1px solid #333;
+        }
+
+        #scanned-result { color: var(--success-color); font-weight: bold; font-family: monospace; font-size: 1.2em; }
+
+        /* 隐藏库自带的按钮，我们使用脚本控制 */
+        #reader__dashboard_section_csr button {
+            padding: 8px 16px; background: #444; color: white; border: none; border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="reader"></div>
+    <div id="flash"></div>
+
+    <div class="status-bar">
+        <div id="status-text">准备就绪，请对准条码</div>
+        <div id="scanned-result">---</div>
+    </div>
+
+    <script>
+        const flashLayer = document.getElementById('flash');
+        const resultText = document.getElementById('scanned-result');
+        let html5QrCode;
+
+        // 成功反馈动画
+        function triggerFeedback(text) {
+            resultText.innerText = text;
+            flashLayer.style.opacity = '1';
+            setTimeout(() => { flashLayer.style.opacity = '0'; }, 200);
+            
+            // 如果在 FileMaker 环境中运行，则回传数据
+            if (window.FileMaker) {
+                FileMaker.PerformScript("Handle_Scan_Result", text);
+            }
+        }
+
+        async function initScanner() {
+            html5QrCode = new Html5Qrcode("reader");
+            
+            const config = {
+                fps: 20,
+                // 针对条形码优化：更宽、更扁的扫描框
+                qrbox: { width: 320, height: 160 },
+                aspectRatio: 1.0,
+                // 优先支持常见的工业条码格式，提升解码效率
+                formatsToSupport: [ 
+                    Html5QrcodeSupportedFormats.EAN_13, 
+                    Html5QrcodeSupportedFormats.CODE_128, 
+                    Html5QrcodeSupportedFormats.CODE_39,
+                    Html5QrcodeSupportedFormats.QR_CODE 
+                ]
+            };
+
+            try {
+                await html5QrCode.start(
+                    { facingMode: "environment" }, 
+                    config, 
+                    (decodedText) => {
+                        triggerFeedback(decodedText);
+                    }
+                );
+            } catch (err) {
+                document.getElementById('status-text').innerText = "摄像头启动失败: " + err;
+            }
+        }
+
+        // 页面加载后自动运行
+        window.onload = initScanner;
+    </script>
+</body>
+</html>
