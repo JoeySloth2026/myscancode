@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>条码采集系统 - Google Sheets 版</title>
+    <script src="https://unpkg.com/html5-qrcode"></script>
+    <style>
+        :root {
+            --primary: #007AFF;
+            --success: #34C759;
+            --error: #FF3B30;
+            --bg: #F2F2F7;
+            --card: #FFFFFF;
+        }
+        body { font-family: -apple-system, sans-serif; background: var(--bg); margin: 0; padding: 0; padding-bottom: 70px; }
+        
+        .config-panel { background: var(--card); padding: 20px; border-bottom: 1px solid #ddd; position: sticky; top: 0; z-index: 100; }
+        h3 { margin: 0 0 8px 0; font-size: 14px; color: #666; }
+        select { width: 100%; padding: 12px; border-radius: 10px; border: 1px solid #ccc; font-size: 16px; margin-bottom: 16px; }
+        
+        .type-btn-group { display: flex; gap: 10px; margin-bottom: 16px; }
+        .type-btn { flex: 1; padding: 12px; border: 1px solid var(--primary); background: white; color: var(--primary); border-radius: 8px; cursor: pointer; }
+        .type-btn.active { background: var(--primary); color: white; }
+        
+        .primary-btn { width: 100%; padding: 14px; background: var(--primary); color: white; border: none; border-radius: 10px; font-weight: 600; font-size: 16px; cursor: pointer; }
+        
+        #scanner-container { width: 100%; max-width: 500px; margin: 10px auto; background: black; border-radius: 12px; overflow: hidden; display: none; }
+        #reader { width: 100%; }
+        
+        .info-card { background: var(--card); margin: 16px; padding: 16px; border-radius: 12px; }
+        .status-box { text-align: center; }
+        #info-display { font-size: 15px; background: #F8F9FA; padding: 12px; border-radius: 10px; margin-bottom: 12px; }
+        
+        .current-barcode { margin-top: 12px; padding: 10px; background: #E8F4FD; border-radius: 8px; display: none; }
+        .current-barcode .value { color: var(--primary); font-weight: 600; font-family: monospace; }
+        
+        #last-result { margin-top: 12px; color: var(--success); font-weight: 600; font-size: 14px; }
+        
+        #log { margin: 16px; padding: 12px; background: #1C1C1E; border-radius: 10px; font-family: monospace; font-size: 11px; max-height: 150px; overflow-y: auto; color: #34C759; }
+        .log-error { color: #FF453A !important; }
+        
+        #flash { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(52, 199, 89, 0.6); pointer-events: none; opacity: 0; z-index: 1000; transition: opacity 0.1s; }
+        
+        .toast { position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.8); color: white; padding: 10px 20px; border-radius: 25px; font-size: 14px; z-index: 1001; animation: fadeInOut 2s ease; }
+        @keyframes fadeInOut { 0% { opacity: 0; transform: translateX(-50%) translateY(20px); } 15% { opacity: 1; transform: translateX(-50%) translateY(0); } 85% { opacity: 1; } 100% { opacity: 0; transform: translateX(-50%) translateY(-20px); } }
+        
+        .bottom-bar { position: fixed; bottom: 0; left: 0; right: 0; background: var(--card); padding: 10px 16px; border-top: 1px solid #ddd; display: flex; gap: 12px; z-index: 99; }
+        .bottom-bar button { flex: 1; padding: 10px; border: none; border-radius: 8px; font-size: 14px; cursor: pointer; }
+        .btn-history { background: #F8F9FA; color: #333; }
+        .btn-stats { background: #E8F4FD; color: var(--primary); }
+        .btn-reset { background: #FEF2F0; color: var(--error); }
+        
+        .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 2000; justify-content: center; align-items: center; }
+        .modal-content { background: white; border-radius: 20px; padding: 20px; width: 90%; max-width: 340px; max-height: 80vh; overflow-y: auto; }
+        .modal-header { font-size: 18px; font-weight: 600; margin-bottom: 16px; }
+        .barcode-info { margin: 12px 0; padding: 10px; background: #F8F9FA; border-radius: 8px; }
+        .modal-close { width: 100%; padding: 12px; background: var(--primary); color: white; border: none; border-radius: 10px; margin-top: 16px; cursor: pointer; }
+        
+        .stats { display: flex; gap: 12px; margin-top: 12px; }
+        .stat-item { flex: 1; text-align: center; padding: 8px; background: #F8F9FA; border-radius: 8px; }
+        .stat-value { font-size: 20px; font-weight: bold; color: var(--primary); }
+        .stat-label { font-size: 11px; color: #666; margin-top: 4px; }
+    </style>
+</head>
+<body>
+
+<div id="flash"></div>
+
+<div class="config-panel">
+    <h3>1. 选择商品</h3>
+    <select id="product-select">
+        <option value="">正在获取商品列表...</option>
+    </select>
+
+    <h3>2. 选择包装类型</h3>
+    <div class="type-btn-group">
+        <button class="type-btn" data-type="Unit">📄 单品</button>
+        <button class="type-btn active" data-type="Inner">📦 内盒</button>
+        <button class="type-btn" data-type="Carton">📦 外箱</button>
+    </div>
+
+    <button id="start-btn" class="primary-btn">📷 开启摄像头</button>
+</div>
+
+<div id="scanner-container">
+    <div id="reader"></div>
+</div>
+
+<div class="info-card">
+    <div class="status-box">
+        <div id="info-display">请选择商品开始扫码</div>
+        <div id="current-barcode" class="current-barcode">
+            <div class="label">当前条码</div>
+            <div class="value" id="current-barcode-value">-</div>
+        </div>
+        <div id="last-result"></div>
+        
+        <div class="stats">
+            <div class="stat-item">
+                <div class="stat-value" id="scan-count">0</div>
+                <div class="stat-label">今日扫描</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-value" id="progress">0%</div>
+                <div class="stat-label">完成进度</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="log">✨ 系统已启动，正在连接服务器...</div>
+
+<div class="bottom-bar">
+    <button class="btn-history" onclick="showHistory()">📋 扫码记录</button>
+    <button class="btn-stats" onclick="showProductDetail()">🔍 商品详情</button>
+    <button class="btn-reset" onclick="resetForm()">🔄 重置</button>
+</div>
+
+<div id="product-modal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header" id="modal-title">商品详情</div>
+        <div id="modal-body"></div>
+        <button class="modal-close" onclick="closeModal()">关闭</button>
+    </div>
+</div>
+
+<script>
+    // ==================== 配置 ====================
+    // ⚠️ 请替换为你的 GAS Web App URL
+    const GAS_URL = "https://script.google.com/macros/s/AKfycbzssAEABBLrWVQvuWfZqZ28v25actQacFfhb3DShYA-1lI6XswWBoZCYvHIWhVjAIBI/exec";
+    
+    // ==================== 全局变量 ====================
+    let html5QrCode;
+    let selectedType = 'Inner';
+    let isProcessing = false;
+    let products = [];
+    let currentProduct = null;
+    
+    // DOM 元素
+    const productSelect = document.getElementById('product-select');
+    const startBtn = document.getElementById('start-btn');
+    const scannerContainer = document.getElementById('scanner-container');
+    const infoDisplay = document.getElementById('info-display');
+    const lastResultEl = document.getElementById('last-result');
+    
+    // ==================== 1. 获取商品列表 ====================
+    async function fetchProducts() {
+        log("正在从 Google Sheets 获取商品...");
+        try {
+            const response = await fetch(`${GAS_URL}?action=getProducts&t=${Date.now()}`);
+            const result = await response.json();
+            
+            if (result.success) {
+                products = result.data;
+                productSelect.innerHTML = '<option value="">-- 请选择商品 --</option>';
+                products.forEach(p => {
+                    const option = document.createElement('option');
+                    option.value = p.id;
+                    option.innerText = `${p.name} ${p.spec ? `(${p.spec})` : ''}`;
+                    productSelect.appendChild(option);
+                });
+                log(`✅ 商品列表加载成功，共 ${products.length} 个商品`);
+                fetchStats();
+            } else {
+                throw new Error(result.error);
+            }
+        } catch (err) {
+            log(`❌ 获取失败: ${err.message}`, true);
+            productSelect.innerHTML = '<option value="">加载失败，请刷新页面</option>';
+        }
+    }
+    
+    async function fetchStats() {
+        try {
+            const response = await fetch(`${GAS_URL}?action=getStats`);
+            const result = await response.json();
+            if (result.success) {
+                const stats = result.data;
+                const progress = Math.round((stats.completedProducts / stats.totalProducts) * 100);
+                document.getElementById('progress').textContent = `${progress}%`;
+            }
+        } catch(e) { console.error(e); }
+    }
+    
+    // ==================== 2. UI 交互 ====================
+    function setType(type, btn) {
+        selectedType = type;
+        document.querySelectorAll('.type-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        updateInfo();
+        updateCurrentBarcode();
+        localStorage.setItem('lastType', type);
+    }
+    
+    function updateInfo() {
+        const productId = productSelect.value;
+        if (productId && products.find(p => p.id === productId)) {
+            const product = products.find(p => p.id === productId);
+            const typeNames = { Unit: '单品', Inner: '内盒', Carton: '外箱' };
+            infoDisplay.innerHTML = `${product.name} ${product.spec ? `(${product.spec})` : ''}<br>${typeNames[selectedType]}`;
+        } else {
+            infoDisplay.innerHTML = "请选择商品开始扫码";
+        }
+    }
+    
+    function updateCurrentBarcode() {
+        const barcodeDiv = document.getElementById('current-barcode');
+        if (currentProduct && currentProduct.barcodes && currentProduct.barcodes[selectedType]) {
+            document.getElementById('current-barcode-value').textContent = currentProduct.barcodes[selectedType];
+            barcodeDiv.style.display = 'block';
+        } else {
+            barcodeDiv.style.display = 'none';
+        }
+    }
+    
+    async function loadProductDetail(productId) {
+        try {
+            const response = await fetch(`${GAS_URL}?action=getProduct&id=${encodeURIComponent(productId)}`);
+            const result = await response.json();
+            if (result.success) {
+                currentProduct = result.data;
+                updateInfo();
+                updateCurrentBarcode();
+            }
+        } catch(e) { console.error(e); }
+    }
+    
+    function resetForm() {
+        productSelect.value = "";
+        currentProduct = null;
+        infoDisplay.innerHTML = "请选择商品开始扫码";
+        document.getElementById('current-barcode').style.display = 'none';
+        lastResultEl.innerHTML = "";
+        if (html5QrCode && html5QrCode.isScanning) {
+            html5QrCode.stop().then(() => {
+                scannerContainer.style.display = 'none';
+                startBtn.innerText = "📷 开启摄像头";
+            });
+        }
+        showToast("已重置");
+    }
+    
+    function showProductDetail() {
+        if (!currentProduct) { showToast("请先选择商品"); return; }
+        const typeNames = { Unit: '单品', Inner: '内盒', Carton: '外箱' };
+        let html = `<div><strong>商品名称:</strong> ${currentProduct.name}</div><div><strong>规格:</strong> ${currentProduct.spec || '-'}</div><div style="margin-top:12px;"><strong>条码信息:</strong></div>`;
+        for (const [type, name] of Object.entries(typeNames)) {
+            const barcode = currentProduct.barcodes?.[type];
+            html += `<div class="barcode-info"><div class="type">${name}</div><div class="code">${barcode && barcode !== "" ? barcode : '❌ 未录入'}</div></div>`;
+        }
+        document.getElementById('modal-title').textContent = `📦 ${currentProduct.name}`;
+        document.getElementById('modal-body').innerHTML = html;
+        document.getElementById('product-modal').style.display = 'flex';
+    }
+    
+    function closeModal() { document.getElementById('product-modal').style.display = 'none'; }
+    
+    function showHistory() {
+        const history = JSON.parse(localStorage.getItem('scanHistory') || '[]');
+        if (history.length === 0) { showToast("暂无扫描记录"); return; }
+        const typeNames = { Unit: '单品', Inner: '内盒', Carton: '外箱' };
+        let html = `<div style="max-height:400px;overflow-y:auto;">`;
+        history.slice(-20).reverse().forEach(record => {
+            const product = products.find(p => p.id === record.productId);
+            html += `<div class="barcode-info"><div><strong>${product ? product.name : record.productId}</strong> - ${typeNames[record.type]}</div><div class="code">${record.barcode}</div><div style="font-size:11px;color:#666;">${new Date(record.timestamp).toLocaleString()}</div></div>`;
+        });
+        html += `</div>`;
+        document.getElementById('modal-title').textContent = `📋 扫描记录 (${history.length})`;
+        document.getElementById('modal-body').innerHTML = html;
+        document.getElementById('product-modal').style.display = 'flex';
+    }
+    
+    // ==================== 3. 提交条码（使用 no-cors） ====================
+    async function submitBarcode(productId, barcode, type) {
+        try {
+            // 使用 no-cors 模式避免 CORS 问题
+            await fetch(GAS_URL, {
+                method: "POST",
+                mode: "no-cors",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ productId: productId, barcode: barcode, type: type, timestamp: Date.now() })
+            });
+            
+            // 保存到本地历史
+            const history = JSON.parse(localStorage.getItem('scanHistory') || '[]');
+            history.push({ productId: productId, barcode: barcode, type: type, timestamp: Date.now() });
+            while (history.length > 200) history.shift();
+            localStorage.setItem('scanHistory', JSON.stringify(history));
+            
+            // 更新计数
+            let scanCount = parseInt(localStorage.getItem('scanCount') || '0');
+            scanCount++;
+            localStorage.setItem('scanCount', scanCount);
+            document.getElementById('scan-count').textContent = scanCount;
+            
+            // 更新当前商品
+            if (currentProduct && currentProduct.id === productId) {
+                if (!currentProduct.barcodes) currentProduct.barcodes = {};
+                currentProduct.barcodes[type] = barcode;
+                updateCurrentBarcode();
+            }
+            
+            log(`✅ ${type} 条码保存成功: ${barcode}`);
+            showToast("保存成功！");
+            lastResultEl.innerHTML = `✅ 已保存: ${barcode}<br>⏰ ${new Date().toLocaleTimeString()}`;
+            return true;
+        } catch (err) {
+            log(`❌ 保存失败: ${err.message}`, true);
+            showToast(`保存失败: ${err.message}`);
+            return false;
+        }
+    }
+    
+    // ==================== 4. 扫码成功 ====================
+    async function onScanSuccess(decodedText) {
+        if (isProcessing) return;
+        const productId = productSelect.value;
+        if (!productId) { showToast("请先选择商品"); return; }
+        if (!decodedText || decodedText.length < 3) { log("⚠️ 条码格式异常", true); return; }
+        
+        isProcessing = true;
+        flashSuccess();
+        lastResultEl.innerText = "识别到: " + decodedText;
+        log(`正在上传 ${selectedType} 码: ${decodedText}`);
+        
+        await submitBarcode(productId, decodedText, selectedType);
+        
+        setTimeout(() => { isProcessing = false; }, 2000);
+    }
+    
+    // ==================== 5. 摄像头控制 ====================
+    function toggleScanner() {
+        if (!productSelect.value) { showToast("请先选择商品"); return; }
+        
+        if (html5QrCode && html5QrCode.isScanning) {
+            html5QrCode.stop().then(() => {
+                scannerContainer.style.display = 'none';
+                startBtn.innerText = "📷 开启摄像头";
+            });
+        } else {
+            scannerContainer.style.display = 'block';
+            startBtn.innerText = "🔴 关闭摄像头";
+            startCamera();
+        }
+    }
+    
+    function startCamera() {
+        html5QrCode = new Html5Qrcode("reader");
+        html5QrCode.start({ facingMode: "environment" }, { fps: 15, qrbox: { width: 280, height: 150 } }, onScanSuccess);
+    }
+    
+    // ==================== 6. 辅助函数 ====================
+    function flashSuccess() {
+        const flash = document.getElementById('flash');
+        flash.style.opacity = '1';
+        setTimeout(() => { flash.style.opacity = '0'; }, 200);
+    }
+    
+    function showToast(message, duration = 2000) {
+        const existing = document.querySelector('.toast');
+        if (existing) existing.remove();
+        const toast = document.createElement('div');
+        toast.className = 'toast';
+        toast.textContent = message;
+        document.body.appendChild(toast);
+        setTimeout(() => toast.remove(), duration);
+    }
+    
+    function log(msg, isError = false) {
+        const logDiv = document.getElementById('log');
+        const entry = document.createElement('div');
+        entry.innerHTML = `[${new Date().toLocaleTimeString()}] ${msg}`;
+        if (isError) entry.style.color = '#FF453A';
+        logDiv.appendChild(entry);
+        logDiv.scrollTop = logDiv.scrollHeight;
+        while (logDiv.children.length > 50) logDiv.removeChild(logDiv.firstChild);
+        console.log(msg);
+    }
+    
+    // ==================== 7. 初始化 ====================
+    startBtn.addEventListener('click', toggleScanner);
+    productSelect.addEventListener('change', () => {
+        if (productSelect.value) {
+            localStorage.setItem('lastProductId', productSelect.value);
+            loadProductDetail(productSelect.value);
+        } else {
+            currentProduct = null;
+            document.getElementById('current-barcode').style.display = 'none';
+            infoDisplay.innerHTML = "请选择商品开始扫码";
+        }
+        updateInfo();
+    });
+    
+    document.querySelectorAll('.type-btn').forEach(btn => {
+        btn.addEventListener('click', () => setType(btn.dataset.type, btn));
+    });
+    document.getElementById('product-modal').addEventListener('click', (e) => { if (e.target === document.getElementById('product-modal')) closeModal(); });
+    
+    // 恢复上次选择
+    const lastType = localStorage.getItem('lastType');
+    if (lastType && ['Unit', 'Inner', 'Carton'].includes(lastType)) {
+        selectedType = lastType;
+        document.querySelectorAll('.type-btn').forEach(btn => {
+            if (btn.dataset.type === lastType) btn.classList.add('active');
+            else btn.classList.remove('active');
+        });
+    }
+    
+    document.getElementById('scan-count').textContent = localStorage.getItem('scanCount') || '0';
+    fetchProducts();
+    log("✅ 系统就绪，请选择商品开始扫描");
+</script>
+
+</body>
+</html>
